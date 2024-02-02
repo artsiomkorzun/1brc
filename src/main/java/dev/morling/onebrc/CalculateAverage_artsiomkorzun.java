@@ -31,6 +31,15 @@ import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Thank you guys:
+ * @gunnarmorling for the challenge.
+ * @thomaswue for the best ILP loop and hinting that the crucial method is not being inlined.
+ * @merykitty for parsing a value with SWAR trick.
+ * @royvanrijn for parsing a key with SWAP trick.
+ * @jerrinot for ILP and 16-byte branching.
+ * @abeobk for the masking idea which makes the later one work as fast as hell.
+ */
 public class CalculateAverage_artsiomkorzun {
 
     private static final Path FILE = Path.of("./measurements.txt");
@@ -39,8 +48,6 @@ public class CalculateAverage_artsiomkorzun {
     private static final long LINE_PATTERN = 0x0A0A0A0A0A0A0A0AL;
     private static final long DOT_BITS = 0x10101000;
     private static final long MAGIC_MULTIPLIER = (100 * 0x1000000 + 10 * 0x10000 + 1);
-    private static final long[] WORD_MASK = { 0, 0, 0, 0, 0, 0, 0, 0, -1 };
-    private static final int[] LENGTH_MASK = { 0, 0, 0, 0, 0, 0, 0, 0, -1 };
 
     private static final Unsafe UNSAFE;
 
@@ -87,14 +94,8 @@ public class CalculateAverage_artsiomkorzun {
         Optional<String> command = info.command();
         Optional<String[]> arguments = info.arguments();
 
-        if (command.isPresent()) {
-            commands.add(command.get());
-        }
-
-        if (arguments.isPresent()) {
-            commands.addAll(Arrays.asList(arguments.get()));
-        }
-
+        command.ifPresent(commands::add);
+        arguments.ifPresent(strings -> commands.addAll(Arrays.asList(strings)));
         commands.add("--worker");
 
         new ProcessBuilder()
@@ -484,13 +485,15 @@ public class CalculateAverage_artsiomkorzun {
             long word;
 
             if (small) {
-                int length1 = length(separator1);
-                int length2 = length(separator2);
+                long mask2 = (separator1 == 0) ? -1 : 0; // cmov
+                long length1 = length(separator1);
+                long length2 = length(separator2) & mask2;
+
                 word1 = mask(word1, separator1);
-                word2 = mask(word2 & WORD_MASK[length1], separator2);
+                word2 = mask(word2 & mask2, separator2);
                 hash = mix(word1 ^ word2);
 
-                chunk.position += length1 + (length2 & LENGTH_MASK[length1]) + 1;
+                chunk.position += length1 + length2 + 1;
                 long pointer = aggregates.find(word1, word2, hash);
 
                 if (pointer != 0) {
@@ -542,7 +545,7 @@ public class CalculateAverage_artsiomkorzun {
             return word & mask;
         }
 
-        private static int length(long separator) {
+        private static long length(long separator) {
             return Long.numberOfTrailingZeros(separator) >>> 3;
         }
 
@@ -550,8 +553,6 @@ public class CalculateAverage_artsiomkorzun {
             long h = x * -7046029254386353131L;
             h ^= h >>> 35;
             return h;
-            // h ^= h >>> 32;
-            // return (int) (h ^ h >>> 16);
         }
 
         private static long dot(long num) {
